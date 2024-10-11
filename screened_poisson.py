@@ -13,7 +13,7 @@ d = 2
 MAX_WALK_STEPS = 32
 EPSILON_SHELL = 1e-2
 
-def purge_circles():
+def clear_debug_vis():
     ax = plt.gca()
     for c in ax.collections:
             c.remove()
@@ -28,7 +28,10 @@ def sample_unit_sphere_uniform(n_samples):
     return torch.stack((x, y), dim=1)  # Shape: (n_samples, 2)
 
 class Env:
-    def __init__(self):
+    def __init__(self, absorption_coeff, goal):
+        self.absorption_coeff = absorption_coeff
+        self.goal = goal
+        
         # Define the obstacles as 2D torch tensors
         self.obstacles = [
             torch.tensor([2.0, 2.0]),
@@ -36,6 +39,7 @@ class Env:
             torch.tensor([0.0, -2.5])
         ]
         self.obstacle_radius = 1.0  # Set the radius for each obstacle to 1.0 units
+        
         self.domain_radius = 10.0
 
     def compute_distance_to_absorbing_boundary(self, current_pt):
@@ -73,7 +77,26 @@ class Env:
         - A boolean tensor of shape (n_walks,) where True indicates the point is outside the boundary.
         """
         return current_pt.norm(dim=1) > self.domain_radius
-
+    
+    def source(self, pts):
+        """
+        Defines the source function at given points.
+        """
+        return torch.zeros(pts.size(0))
+    
+    def _hit_goal(self, pts, radii):
+        free_dist = radii
+        goal_dist = (pts - self.goal).pow(2).sum(1).sqrt()
+        
+        return free_dist > goal_dist
+    
+    def dirichlet(self, pts, radii):
+        """
+        Defines the Dirichlet boundary condition at given points.
+        For simplicity, assume boundary condition is zero.
+        """
+        return torch.where(self._hit_goal(pts, radii), 1.0, 0.0)
+    
 # Define the Greens function for the Screened Poisson equation in 2D
 class YukawaGreensFnBall2D:
     def __init__(self, lambda_, r_clamp=1e-4):
@@ -209,32 +232,6 @@ class YukawaGreensFnBall2D:
         self.y_surf = self.c + self.R.unsqueeze(1) * directions  # Shape: (n_walks, 2)
         return self.y_surf
 
-# Define the PDE class
-class PDE:
-    def __init__(self, absorption_coeff, goal):
-        self.absorption_coeff = absorption_coeff
-        self.goal = goal
-
-    def source(self, pts):
-        """
-        Defines the source function at given points.
-        For simplicity, assume source is zero everywhere.
-        """
-        return torch.zeros(pts.size(0))
-    
-    def hit_goal(self, pts, radii):
-        free_dist = radii
-        goal_dist = (pts - self.goal).pow(2).sum(1).sqrt()
-        
-        return free_dist > goal_dist
-    
-    def dirichlet(self, pts, radii):
-        """
-        Defines the Dirichlet boundary condition at given points.
-        For simplicity, assume boundary condition is zero.
-        """
-        return torch.where(self.hit_goal(pts, radii), 1.0, 0.0)
-
 # Define the WalkState class
 class WalkState:
     def __init__(self, current_pt, throughput):
@@ -273,9 +270,6 @@ def walk(dist_to_absorbing_boundary, state, vis):
         # Compute the distance to the absorbing boundary for the next step
         dist = env.compute_distance_to_absorbing_boundary(state.current_pt)
         state.radii = dist
-        
-        # Set distance to zero for walks that are done
-        # dist[state.walk_done] = 0.0
 
         # Check if walks have reached the epsilon shell
         reached_epsilon_shell = dist < EPSILON_SHELL
@@ -293,7 +287,7 @@ def walk(dist_to_absorbing_boundary, state, vis):
             ax.add_collection(coll)
             plt.pause(0.001)
         
-        state.walk_done = state.walk_done | pde.hit_goal(state.current_pt, dist)
+        state.walk_done = state.walk_done | env._hit_goal(state.current_pt, dist)
         
         # Break if all walks are done
         if state.walk_done.all():
@@ -304,7 +298,7 @@ def walk(dist_to_absorbing_boundary, state, vis):
     return state
 
 # Implement the estimateSolutionAndGrad function
-def estimate_solution_and_grad(pde: PDE, env: Env, n_walks, sample_pt, vis=False):
+def estimate_solution_and_grad(env: Env, n_walks, sample_pt, vis=False):
     """
     Estimates the solution and gradient at sample_pt using n_walks walks.
 
@@ -323,7 +317,7 @@ def estimate_solution_and_grad(pde: PDE, env: Env, n_walks, sample_pt, vis=False
 
     # Initialize the state
     state = WalkState(current_pt, throughput)
-    state.greens_fn = YukawaGreensFnBall2D(pde.absorption_coeff)
+    state.greens_fn = YukawaGreensFnBall2D(env.absorption_coeff)
 
     # Compute the distance to the absorbing boundary
     dist_to_absorbing_boundary = env.compute_distance_to_absorbing_boundary(state.current_pt)
@@ -343,7 +337,7 @@ def estimate_solution_and_grad(pde: PDE, env: Env, n_walks, sample_pt, vis=False
     greens_fn_norm = state.greens_fn.norm()  # Shape: (n_walks,)
 
     # Compute the source contribution
-    source_contribution = greens_fn_norm * pde.source(y_vol)  # Shape: (n_walks,)
+    source_contribution = greens_fn_norm * env.source(y_vol)  # Shape: (n_walks,)
     state.total_source_contribution += state.throughput * source_contribution
 
     # Compute the gradient direction for the source contribution
@@ -369,7 +363,7 @@ def estimate_solution_and_grad(pde: PDE, env: Env, n_walks, sample_pt, vis=False
     # Compute the terminal contribution
     # For walks that reached the absorbing boundary, we use the Dirichlet condition
     # For simplicity, assume Dirichlet condition is zero    
-    terminal_contribution = pde.dirichlet(state.current_pt, state.radii)  # Shape: (n_walks,)
+    terminal_contribution = env.dirichlet(state.current_pt, state.radii)  # Shape: (n_walks,)
     # FIXME total_contribution = state.throughput * terminal_contribution + state.total_source_contribution  # Shape: (n_walks,)
     total_contribution = terminal_contribution
     
@@ -392,7 +386,7 @@ def estimate_solution_and_grad(pde: PDE, env: Env, n_walks, sample_pt, vis=False
 
     return estimated_solution.item(), derivative_estimate.mean(axis=0) #  estimated_derivative.item()
 
-def visualize_init(env: Env, start, goal):
+def visualize_init(env: Env, start):
     fig = plt.figure(figsize=(10, 10))
     ax = plt.gca()
     
@@ -403,7 +397,7 @@ def visualize_init(env: Env, start, goal):
     ax.add_artist(circle)
     
     circle = plt.Circle(
-        goal.flatten().tolist(), 0.2, color='blue', alpha=0.5, fill=True
+        env.goal.flatten().tolist(), 0.2, color='blue', alpha=0.5, fill=True
     )
     ax.add_artist(circle)
     
@@ -423,6 +417,7 @@ def visualize_init(env: Env, start, goal):
     ax.set_xlim(-env.domain_radius - 1, env.domain_radius + 1)
     ax.set_ylim(-env.domain_radius - 1, env.domain_radius + 1)
     ax.set_aspect('equal', 'box')
+    plt.title(f"PDE, screening {absorption_coeff}, walks {n_walks}")
     plt.xlabel('X')
     plt.ylabel('Y')
     plt.grid(True)
@@ -432,35 +427,32 @@ def visualize_init(env: Env, start, goal):
 # Example usage
 if __name__ == "__main__":
     
-    # Set up the PDE
-    absorption_coeff = 100  # Example value
+    absorption_coeff = 100 
     
-    # Number of walks
-    n_walks = 10000  # Increase for better estimates
+    n_walks = 1000  
+    
+    vis = False
 
-    # Starting point for estimation
-    start = torch.tensor([-4., -4.])  # Example point inside the unit circle
+    start = torch.tensor([-4., -4.]) 
     
     goal = torch.tensor([[4., 4.]])
+        
+    env = Env(absorption_coeff, goal)
     
-    plt.title(f"PDE, screenign {absorption_coeff}, walks {n_walks}")
-    
-    pde = PDE(absorption_coeff, goal)
-    env = Env()
-    
-    visualize_init(env, start, pde.goal)
-    
-    sleep(8)
-    
-    # Estimate the solution and gradient
-    for _ in range (100):
-        purge_circles()
+    # Set up matplotlib
+    visualize_init(env, start)
+        
+    # Gradient descent on start
+    for _ in range(100):
+        clear_debug_vis()
+        
+        # PLot start
         circle = plt.Circle(
             start.flatten().tolist(), 0.2, color='blue', alpha=0.5, fill=True
         )
         plt.gca().add_artist(circle)
     
-        estimated_solution, estimated_derivative = estimate_solution_and_grad(pde, env, n_walks, start, vis=False)
+        estimated_solution, estimated_derivative = estimate_solution_and_grad(env, n_walks, start, vis=vis)
         start += 0.2 * estimated_derivative / torch.norm(estimated_derivative)
         print('Derivative', estimated_derivative)
         
