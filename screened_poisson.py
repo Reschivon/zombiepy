@@ -390,7 +390,7 @@ def visualize_init(env: Env, start):
     fig = plt.figure(figsize=(10, 10))
     ax = plt.gca()
     
-    # PLot start end
+    # Plot start end
     circle = plt.Circle(
         start.flatten().tolist(), 0.2, color='blue', alpha=0.5, fill=True
     )
@@ -429,7 +429,7 @@ if __name__ == "__main__":
     
     absorption_coeff = 100 
     
-    n_walks = 1000  
+    n_walks = 10000 
     
     vis = False
 
@@ -446,7 +446,7 @@ if __name__ == "__main__":
     for _ in range(100):
         clear_debug_vis()
         
-        # PLot start
+        # Plot start
         circle = plt.Circle(
             start.flatten().tolist(), 0.2, color='blue', alpha=0.5, fill=True
         )

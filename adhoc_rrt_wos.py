@@ -24,7 +24,7 @@ class Env:
             return self.sample_free()
         
         sample = plt.Circle(
-            new_position, 0.05, color='black', fill=False, alpha=0.5
+            new_position, 0.05, color='black', fill=True, alpha=0.3
         )
         plt.gca().add_artist(sample)
     
@@ -157,8 +157,8 @@ def extract_path(goal_node):
     path.reverse()  # Reverse to get path from start to goal
     return np.array(path)
 
-def plan_path_wos(start, goal, env, max_iterations=5000, vis=False):
-    eps = 0.1
+def plan_path_wos(start, goal, env: Env, max_iterations=5000, vis=False):
+    eps = 1e-2
         
     # Initialize tree with start node
     start_node = SphereNode(start, 
